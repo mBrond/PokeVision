@@ -1,2 +1,6 @@
 .ipynb_checkpoints
 *.pth
+*.pt
+images/
+runs/
+YOLO_data/

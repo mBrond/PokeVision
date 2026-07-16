@@ -7,14 +7,17 @@ https://medium.com/@filipesampaiocampos/building-a-pok%C3%A9mon-image-classifier
 
 ## Dataset
 Ideias: 
-https://www.kaggle.com/datasets/thedagger/pokemon-generation-one
-https://www.kaggle.com/datasets/mikoajkolman/pokemon-images-first-generation17000-files
-
+1: https://www.kaggle.com/datasets/thedagger/pokemon-generation-one
+2: https://www.kaggle.com/datasets/mikoajkolman/pokemon-images-first-generation17000-files
+3: https://www.kaggle.com/datasets/vedantkasargod/pokemon-1000-yolo?select=pokemon-dataset-1000
 
 
 ## Classificador
 
 ## Detecção YOLO
+
+Para o YOLO, é necessário que as imagens do dataset tenham descritas as boundig box de onde os pokémon estão.
+Os dois primeiros dataset não tem essa característica. Opções: implementar script/fazer na mão o bounding box dos datasets 1 e 2. Ou, tentar usar o dataset 3
 
 ## TODO
 - Melhorar seção Sobre
