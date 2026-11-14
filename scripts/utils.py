@@ -1,5 +1,7 @@
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]  # raiz do repositório
+
 #bulba 93
 #charmandar 123
 #chamrleon 124
@@ -134,6 +136,6 @@ if __name__ == "__main__":
 
     #mapear_ids_por_nome_arquivo(caminho_da_pasta, meu_mapeamento)
 
-    organizar_arquivos_dinamico("YOLO_data\\pokemon-reduzido\\test", {".txt": "labels", ".png":"images"})
-    organizar_arquivos_dinamico("YOLO_data\\pokemon-reduzido\\train", {".txt": "labels", ".png":"images"})
-    organizar_arquivos_dinamico("YOLO_data\\pokemon-reduzido\\val", {".txt": "labels", ".png":"images"})
+    organizar_arquivos_dinamico(ROOT / "data/pokemon-reduzido/test", {".txt": "labels", ".png":"images"})
+    organizar_arquivos_dinamico(ROOT / "data/pokemon-reduzido/train", {".txt": "labels", ".png":"images"})
+    organizar_arquivos_dinamico(ROOT / "data/pokemon-reduzido/val", {".txt": "labels", ".png":"images"})

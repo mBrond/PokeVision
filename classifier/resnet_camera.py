@@ -4,6 +4,10 @@ import torch.nn as nn
 from torchvision import transforms
 from torchvision.models import resnet18
 from PIL import Image
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]  # raiz do repositório
+
 
 # 1. Definir as mesmas classes do seu treinamento
 classes = [
@@ -25,7 +29,7 @@ model = resnet18()
 model.fc = nn.Linear(model.fc.in_features, len(classes))
 
 # Substitua pelo nome do seu arquivo de pesos salvo durante o treino
-model.load_state_dict(torch.load("model_epoch_5.pth", map_location=device)) 
+model.load_state_dict(torch.load(ROOT / "models/classifier/model_epoch_5.pth", map_location=device)) 
 model.to(device)
 model.eval()
 
