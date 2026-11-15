@@ -1,85 +1,194 @@
 # Pokédex com Visão Computacional
 
-Este projeto tem como objetivo criar uma experiência semelhante a uma Pokédex, utilizando técnicas de visão computacional para identificar e detectar Pokémon em tempo real pela câmera.
+Uma Pokédex que identifica Pokémon da 1ª geração em tempo real pela webcam ou a partir de imagens enviadas, e mostra a ficha de cada um (número, tipos, altura, peso, descrição e sprite) numa interface web.
 
-## Objetivo
+O reconhecimento usa **dois modelos em sequência**: um detector **YOLOv8** que só localiza "um Pokémon" na imagem, e um classificador **ResNet18** que identifica a espécie no recorte. Os dados da ficha vêm da [PokéAPI](https://pokeapi.co/).
 
-O projeto combina dois fluxos principais:
+## Funcionalidades
 
-- **Classificação de imagens:** identifica qual Pokémon está presente em uma imagem usando uma rede neural convolucional (ResNet18).
-- **Detecção de objetos:** localiza Pokémon em imagens ou vídeo com o modelo YOLO.
+- Detecção e identificação ao vivo pela webcam, com stream de vídeo no navegador
+- Análise de imagens arrastadas para o visor ou coladas
+- Vários Pokémon por imagem (uma caixa e uma classificação para cada)(Não funcionando corretamente)
+- Ficha com dados da PokéAPI
+- Reconhecimento offfline, internet usada apenas para a ficha do pokémon
 
-## Tecnologias utilizadas
+## Resultados
 
-Python, PyTorch, torchvision, OpenCV, Ultralytics YOLO e Pillow.
+Medidos em conjuntos de teste separados, nunca usados no treino nem na escolha do melhor modelo.
+
+| Modelo | Tarefa | Dados de teste | Resultado |
+|---|---|---|---|
+| YOLOv8m, 1 classe | localizar Pokémon | 95 imagens | mAP50 0,987 · mAP50-95 0,850 · recall 1,0 |
+| ResNet18 | identificar a espécie (142 classes) | ~2.500 imagens | 95,9% top-1 · 99,2% top-5 |
+
+Os erros que sobram no classificador são quase todos entre evoluções da mesma linha (Poliwhirl/Poliwrath, Rhyhorn/Rhydon, Pidgeotto/Pidgeot).
+
+## Arquitetura
+
+```mermaid
+flowchart LR
+    subgraph Navegador
+        UI[index.html + app.js]
+    end
+    subgraph Servidor FastAPI
+        CAM[Thread da câmera] --> PK
+        UP[POST /identificar] --> PK
+        PK[Pokedex] --> Y[YOLOv8m<br/>1 classe]
+        Y -->|caixas| R[ResNet18<br/>142 classes]
+        API[GET /pokemon/nome] --> PA[pokeapi.py<br/>com cache]
+    end
+    WEB[(webcam)] --> CAM
+    PA <--> POKEAPI[(PokéAPI)]
+    CAM -->|GET /video · MJPEG| UI
+    CAM -->|GET /info · JSON| UI
+    UI --> UP
+    UI --> API
+```
+
+**Pipeline de reconhecimento** (`pokedex.py`, classe `Pokedex`):
+
+1. O **YOLOv8m** recebe o frame inteiro e devolve uma caixa para cada Pokémon encontrado (confiança mínima de 0,5).
+2. Cada caixa ganha **10% de margem** e é recortada, porque as imagens de treino do classificador têm um pouco de fundo em volta do Pokémon.
+3. Os recortes passam juntos, num único lote, pela **ResNet18**, que devolve a espécie e a probabilidade de cada um.
+
+**Servidor** (`app/servidor.py`):
+
+- Uma **thread separada** lê a webcam e roda o pipeline sem parar, guardando só o último resultado. As rotas apenas leem esse resultado, então o navegador nunca espera pela inferência.
+- `GET /video` entrega o vídeo como **MJPEG**, um fluxo de JPEGs que o navegador exibe num simples `<img>`.
+- `GET /info` devolve o Pokémon de maior confiança no frame atual.
+- `POST /identificar` recebe uma imagem enviada e devolve as detecções e a imagem anotada.
+- `GET /pokemon/{nome}` busca e resume os dados na PokéAPI, com cache em memória.
+- Câmera e upload compartilham o mesmo modelo, protegido por um lock, porque o YOLO não é seguro para uso simultâneo por várias threads.
+
+**Interface** (`app/static/`): HTML, CSS e JavaScript puros. O navegador consulta `/info` a cada 500 ms e decide o que mostrar:
+
+- a ficha só aparece quando a confiança chega a **60%**;
+- ela fica na tela por **30 segundos** depois da última vez que o Pokémon foi visto com essa confiança;
+- outro Pokémon com 60% ou mais substitui a ficha na hora.
+
+## Por que dois modelos em vez de um
+
+A primeira versão usava um único YOLOv8m treinado para detectar e classificar as 149 classes ao mesmo tempo, com o dataset do Roboflow (917 imagens com caixas). Ele chegou a mAP50-95 de 0,70 no teste.
+
+Para entender de onde vinham os erros, o mesmo modelo foi avaliado ignorando a classe (`single_cls=True`), medindo só se as caixas estavam no lugar certo. O resultado foi **mAP50-95 de 0,861**: o modelo localizava muito bem, e quase toda a perda vinha de errar a espécie.
+
+O motivo está nos dados. Com 917 imagens para 149 classes, o detector via cerca de **6 exemplos por Pokémon**, pouco para separar espécies parecidas. Já existia um dataset de classificação com **~17 mil imagens**, mas sem caixas, então não servia para treinar um detector.
+
+Separar as tarefas deixa cada modelo aprender com os dados que tem:
+
+| | Detector (YOLOv8m) | Classificador (ResNet18) |
+|---|---|---|
+| Pergunta que responde | Onde há um Pokémon? | Qual Pokémon é este? |
+| Dados | 917 imagens com caixas | ~17 mil imagens por classe, sem caixas |
+| Classes | 1 ("pokemon") | 142 espécies |
+| Entrada | o frame inteiro | o recorte da caixa, 224×224 |
+
+**Ganhos:** o detector de 1 classe encontrou todos os Pokémon do teste (recall 1,0), e a espécie passou a ser decidida por um modelo com cerca de 100 vezes mais exemplos por classe. Cada modelo também pode ser retreinado ou trocado sem mexer no outro.
+
+**Custos:** são duas redes por frame, e a classificação depende de a caixa ser boa. Se o detector errar a região, o classificador recebe um recorte ruim.
+
+Os dois modelos partem de pesos pré-treinados (COCO para o YOLO, ImageNet para a ResNet) e passam por *fine-tuning*. Por isso o classificador usa a normalização do ImageNet: a rede espera entradas na mesma escala com que foi pré-treinada.
 
 ## Estrutura do projeto
 
 ```
 pokedex/
-├── classifier/
-│   ├── pokemon_classifier.ipynb   # treino e teste do classificador ResNet18 (72 classes)
-│   ├── resnet_camera.py           # classificação em tempo real pela webcam
-│   └── treinar_yolo_cls.py        # alternativa: classificador YOLOv8m-cls
+├── pokedex.py                     # pipeline: classe Pokedex (YOLO + ResNet); também roda sozinho
+├── app/
+│   ├── servidor.py                # FastAPI: câmera, /video, /info, /identificar, /pokemon
+│   ├── pokeapi.py                 # busca e cache dos dados da PokéAPI
+│   └── static/                    # interface: index.html, style.css, app.js
 ├── detector/
-│   ├── treinar_yolo_4classes.py   # YOLOv8n com 4 classes (Bulbasaur, Charmander, Charmeleon, Charizard)
-│   ├── treinar_yolo_gen1.py       # YOLOv8m com as 149 classes do dataset Roboflow Gen 1
-│   └── camera.py                  # detecção em tempo real pela webcam
+│   ├── treinar_yolo_1classe.py    # treino do detector atual
+│   ├── treinar_yolo_gen1.py       # experimento: YOLO com 149 classes
+│   ├── treinar_yolo_4classes.py   # experimento: YOLO com 4 classes
+│   └── camera.py                  # experimento: YOLO puro na webcam
+├── classifier/
+│   ├── treinar_resnet.py          # treino e avaliação do classificador atual
+│   ├── pokemon_classifier.ipynb   # experimento: primeira versão do classificador
+│   ├── resnet_camera.py           # experimento: classificação na webcam (incompatível com o modelo atual)
+│   └── treinar_yolo_cls.py        # experimento: classificador YOLOv8-cls
 ├── scripts/
-│   ├── separador.py               # gera o split train/val de data/PokemonData para o YOLO-cls
-│   └── utils.py                   # ajuste de IDs de classe e organização images/labels
-├── docs/                          # anotações antigas (ideias de datasets, fontes)
-├── data/        (ignorado no git) # datasets
-├── models/      (ignorado no git) # pesos treinados (classifier/) e pré-treinados (base/)
-├── runs/        (ignorado no git) # resultados de treino do Ultralytics
-└── images/      (ignorado no git) # imagens de exemplo para teste
+│   ├── uma_classe.py              # converte o dataset do Roboflow para 1 classe
+│   ├── separador.py               # split train/val para o YOLOv8-cls
+│   └── utils.py                   # utilitários de labels e pastas
+├── docs/                          # anotações antigas
+├── data/      (fora do git)       # datasets
+├── models/    (fora do git)       # pesos do classificador, classes.json, pesos base do YOLO
+└── runs/      (fora do git)       # resultados de treino do Ultralytics
 ```
-
-Os scripts usam caminhos relativos à raiz do repositório, então podem ser executados de qualquer pasta.
 
 ## Dados
 
-| Pasta em `data/` | Conteúdo | Fonte |
+| Dataset | Uso | Fonte |
 |---|---|---|
-| `pokemon-dataset-1000/` | imagens por Pokémon | [Kaggle – pokemon-1000-yolo](https://www.kaggle.com/datasets/vedantkasargod/pokemon-1000-yolo) |
-| `pokemon-reduzido/` | subconjunto com bounding boxes, 4 classes | derivado do anterior |
-| `roboflow-gen1/` | 917 imagens com bounding boxes, 149 classes (CC BY 4.0) | [Roboflow – Pokemon Gen 1](https://universe.roboflow.com/anthonyk/pokemon-gen-1/dataset/2) |
-| `PokemonData/` | ~6.800 imagens por classe (150 classes) | Kaggle |
+| Pokemon Gen 1 v2 (917 imagens, caixas em 149 classes, CC BY 4.0) | detector, convertido para 1 classe | [Roboflow](https://universe.roboflow.com/anthonyk/pokemon-gen-1/dataset/2) |
+| Pokemon Images First Generation (~17 mil imagens) | classificador | [Kaggle](https://www.kaggle.com/datasets/mikoajkolman/pokemon-images-first-generation17000-files) |
 
-O classificador ResNet baixa seu dataset automaticamente via `kagglehub` ([pokemon-images-first-generation17000-files](https://www.kaggle.com/datasets/mikoajkolman/pokemon-images-first-generation17000-files)).
+No dataset do Kaggle, as pastas `MrMime` e `Mr. Mime` são o mesmo Pokémon e precisam ser juntadas antes do treino, o que resulta em 142 classes.
 
-## Requisitos
+## Como usar
+
+### Instalação
 
 ```bash
-python -m venv .venv
+python -m venv pokeenv
+pokeenv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-## Como executar
+Para treinar em GPU NVIDIA, instale o PyTorch com CUDA pelo seletor de [pytorch.org](https://pytorch.org/get-started/locally/).
 
-**Classificador (ResNet18)**
+### Treino
 
-1. Abra `classifier/pokemon_classifier.ipynb` e execute as células para treinar; os pesos são salvos em `models/classifier/`.
-2. Webcam: `python classifier/resnet_camera.py`
+1. Baixe o dataset do Roboflow em `data/roboflow-gen1/` e converta para 1 classe:
+   ```bash
+   python scripts/uma_classe.py
+   ```
+2. Treine o detector (resultado em `runs/detect/gen1-1classe/`):
+   ```bash
+   python detector/treinar_yolo_1classe.py
+   ```
+3. Treine o classificador. O dataset do Kaggle é baixado pelo `kagglehub`, e os pesos e a lista de classes são salvos em `models/classifier/`:
+   ```bash
+   python classifier/treinar_resnet.py
+   ```
 
-**Detector (YOLO)**
+### Interface web
 
-- Treinar: `python detector/treinar_yolo_gen1.py` (ou `treinar_yolo_4classes.py`)
-- Webcam: `python detector/camera.py`
+Da raiz do projeto:
 
-Os resultados de treino vão para `runs/detect/<nome>/`.
+```bash
+python -m uvicorn app.servidor:app
+```
 
-## Resultados atuais
+Abra http://127.0.0.1:8000. Os botões do aparelho alternam entre a câmera e o modo imagem, em que dá para arrastar uma foto até o visor ou colar com Ctrl+V.
 
-| Modelo | Classes | Métrica |
-|---|---|---|
-| ResNet18 (classificação) | 72 | ~86–90% de acurácia de validação |
-| YOLOv8n (detecção) | 4 | mAP50 ≈ 0,93 |
-| YOLOv8m (detecção) | 149 | mAP50 ≈ 0,77 / mAP50-95 ≈ 0,70 |
+
+### Linha de comando
+
+```bash
+python pokedex.py                          # webcam, numa janela do OpenCV
+python pokedex.py images/Charmander.png    # uma imagem
+```
+
+## Limitações
+
+- **Fotos de telas:** apontando a câmera para uma imagem no celular, o detector costuma marcar a tela inteira em vez do Pokémon. Reflexo, moiré e cores alteradas também pesam. Os dois datasets são de artes digitais, sem imagens capturadas por câmera.
+- **Pelúcias e objetos reais:** o treino tem só desenhos, então bonecos e pelúcias estão fora do domínio.
+- **Vários Pokémon juntos:** só 3 imagens do dataset de detecção têm mais de um Pokémon, e Pokémon sobrepostos podem ser unidos numa só caixa.
+- **Evoluções parecidas:** são a principal fonte de erro do classificador.
 
 ## Próximos passos
 
-- Pipeline em duas etapas: detector de 1 classe ("pokemon") + classificador no recorte.
-- Expandir o classificador para as 151 classes e avaliar no conjunto de teste.
-- Montar um conjunto de teste próprio com fotos da webcam (cartas, pelúcias, telas).
-- API (FastAPI) integrada à PokéAPI.
+- Coletar e rotular frames reais (telas e cartas fotografadas) para *fine-tuning* do detector
+- Augmentations que imitam a câmera no classificador (`ColorJitter`, desfoque, perspectiva)
+- Usar a câmera do celular pelo navegador, servindo a página por HTTPS
+
+## Créditos
+
+- Dados de Pokémon: [PokéAPI](https://pokeapi.co/)
+- Dataset de detecção: [Pokemon Gen 1, Roboflow Universe](https://universe.roboflow.com/anthonyk/pokemon-gen-1/dataset/2) (CC BY 4.0)
+- Dataset de classificação: [Kaggle, mikoajkolman](https://www.kaggle.com/datasets/mikoajkolman/pokemon-images-first-generation17000-files)
+
+Este é apenas um projeto pessoal.
