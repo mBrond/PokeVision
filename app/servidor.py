@@ -17,6 +17,7 @@ from fastapi import File, HTTPException, UploadFile
 
 
 from pokedex import Pokedex, desenhar
+from app.pokeapi import buscar
 
 STATIC = Path(__file__).resolve().parent / "static"
 CAMERA = 0
@@ -129,3 +130,10 @@ def identificar(arquivo: UploadFile = File(...)):
         "todos": [{"nome": n, "confianca": round(c, 3)} for _, n, c in deteccoes],
         "imagem": "data:image/jpeg;base64," + base64.b64encode(buffer).decode(),
     }
+
+@app.get("/pokemon/{nome}")
+def pokemon(nome: str):
+    dados = buscar(nome)
+    if dados is None:
+        raise HTTPException(404, f"Não encontrei {nome} na PokéAPI")
+    return dados

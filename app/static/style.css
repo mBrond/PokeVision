@@ -170,3 +170,12 @@ body {
 }
 
 .visor.aguardando img { visibility: hidden; }
+
+.sprite {
+  float: right;
+  width: 96px;
+  height: 96px;
+  image-rendering: pixelated;
+}
+
+.sprite:not([src]) { visibility: hidden; }
