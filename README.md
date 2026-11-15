@@ -24,27 +24,6 @@ Medidos em conjuntos de teste separados, nunca usados no treino nem na escolha d
 Os erros que sobram no classificador são quase todos entre evoluções da mesma linha (Poliwhirl/Poliwrath, Rhyhorn/Rhydon, Pidgeotto/Pidgeot).
 
 ## Arquitetura
-
-```mermaid
-flowchart LR
-    subgraph Navegador
-        UI[index.html + app.js]
-    end
-    subgraph Servidor FastAPI
-        CAM[Thread da câmera] --> PK
-        UP[POST /identificar] --> PK
-        PK[Pokedex] --> Y[YOLOv8m<br/>1 classe]
-        Y -->|caixas| R[ResNet18<br/>142 classes]
-        API[GET /pokemon/nome] --> PA[pokeapi.py<br/>com cache]
-    end
-    WEB[(webcam)] --> CAM
-    PA <--> POKEAPI[(PokéAPI)]
-    CAM -->|GET /video · MJPEG| UI
-    CAM -->|GET /info · JSON| UI
-    UI --> UP
-    UI --> API
-```
-
 **Pipeline de reconhecimento** (`pokedex.py`, classe `Pokedex`):
 
 1. O **YOLOv8m** recebe o frame inteiro e devolve uma caixa para cada Pokémon encontrado (confiança mínima de 0,5).
