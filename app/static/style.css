@@ -1,0 +1,172 @@
+:root {
+  --case: #c62a32;
+  --case-escuro: #8e1b22;
+  --moldura: #2b0d10;
+  --lcd: #f2c46b;
+  --lcd-texto: #412402;
+  --deteccao: #5dcaa5;
+  --rotulo: #f7c1c1;
+  --led: #ef9f27;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  background: #1b1b1f;
+  font-family: "Courier New", monospace;
+}
+
+/* ---------- corpo do aparelho ---------- */
+.aparelho {
+  width: min(1100px, 95vw);
+  display: grid;
+  grid-template-columns: 1.3fr 1fr;
+  gap: 24px;
+  padding: 28px;
+  background: var(--case);
+  border: 4px solid var(--case-escuro);
+  border-radius: 32px 32px 48px 48px;
+}
+
+.moldura {
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+  background: var(--moldura);
+  border-radius: 16px;
+}
+
+/* ---------- visor da câmera ---------- */
+.visor {
+  position: relative;
+  overflow: hidden;
+  aspect-ratio: 4 / 3;
+  background: #0d1418;
+  border-radius: 8px;
+}
+
+.visor img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.varredura {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--deteccao);
+  opacity: 0.4;
+  animation: varrer 3s linear infinite;
+}
+
+@keyframes varrer {
+  from { top: 0; }
+  to   { top: 100%; }
+}
+
+/* ---------- ficha (LCD) ---------- */
+.lcd {
+  flex: 1;
+  padding: 18px;
+  background: var(--lcd);
+  color: var(--lcd-texto);
+  border-radius: 8px;
+}
+
+.lcd p          { margin: 0; font-size: 15px; line-height: 1.7; }
+.lcd .numero    { font-size: 13px; }
+.lcd .nome      { margin: 0 0 8px; font-size: 28px; }
+.lcd .tipos     { margin-bottom: 10px; }
+.lcd .descricao { margin: 12px 0; font-size: 13px; min-height: 3.4em; }
+.lcd .confianca { font-size: 13px; }
+
+.tipo {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 10px;
+  border: 2px solid var(--lcd-texto);
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+/* ---------- rodapé ---------- */
+.rodape {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 8px;
+}
+
+.rotulo         { margin: 8px 0 0; color: var(--rotulo); font-size: 12px; letter-spacing: 1px; }
+.rodape .rotulo { margin: 0; }
+
+.led {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--led);
+  opacity: 0.35;
+}
+
+.led.ativo {
+  opacity: 1;
+  animation: piscar 1s steps(2) infinite;
+}
+
+@keyframes piscar {
+  50% { opacity: 0.35; }
+}
+
+.friso { flex: 1; height: 6px; border-radius: 3px; background: var(--case-escuro); }
+
+.botao {
+  width: 46px;
+  height: 46px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--case-escuro);
+  border: 3px solid var(--moldura);
+  color: var(--rotulo);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.botao:hover { filter: brightness(1.2); }
+.botao.ativo { border-color: var(--led); color: var(--led); }
+
+.visor.modo-imagem img { object-fit: contain; }
+.visor.modo-imagem .varredura { display: none; }
+
+.soltar {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  text-align: center;
+  font-size: 16px;
+  color: var(--deteccao);
+  background: rgba(13, 20, 24, 0.85);
+  border: 3px dashed var(--deteccao);
+  border-radius: 8px;
+}
+
+.visor.aguardando .soltar,
+.visor.arrastando .soltar { display: flex; }
+
+.visor.arrastando .soltar {
+  color: #fff;
+  background: rgba(93, 202, 165, 0.3);
+}
+
+.visor.aguardando img { visibility: hidden; }

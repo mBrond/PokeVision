@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pokédex</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="aparelho">
+    <section class="moldura">
+      <div class="visor" id="visor">
+        <img src="/video" alt="Câmera" id="visor-img">
+        <div class="varredura"></div>
+        <div class="soltar">arraste ou cole uma imagem aqui</div>
+      </div>
+      <p class="rotulo">visor · cam 0</p>
+    </section>
+
+    <section class="moldura">
+      <div class="lcd">
+        <p class="numero" id="numero">nº ---</p>
+        <h1 class="nome" id="nome">Procurando...</h1>
+        <p class="tipos" id="tipos"></p>
+        <p>altura .. <span id="altura">—</span></p>
+        <p>peso .... <span id="peso">—</span></p>
+        <p class="descricao" id="descricao"></p>
+        <p class="confianca">confiança <span id="barra"></span> <span id="confianca"></span></p>
+      </div>
+    </section>
+
+    <footer class="rodape">
+      <span class="led" id="led"></span>
+      <span class="rotulo" id="status">scan ativo</span>
+      <span class="friso"></span>
+      <span class="friso"></span>
+      <button class="botao ativo" id="btn-camera" title="Câmera">cam</button>
+      <button class="botao" id="btn-imagem" title="Enviar imagem">img</button>
+    </footer>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
