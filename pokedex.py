@@ -9,6 +9,8 @@ from ultralytics import YOLO
 
 from classifier.treinar_resnet import criar_modelo, eval_tf
 
+from collections import deque
+
 ROOT = Path(__file__).resolve().parent
 DETECTOR = ROOT / "runs/detect/gen1-1classe/weights/best.pt"
 CLASSIFICADOR = ROOT / "models/classifier/resnet18_best.pth"
@@ -19,15 +21,24 @@ CONF_DETECCAO = 0.5
 CONF_CLASSE = 0.6
 MARGEM = 0.10
 
+JANELA_FRAMES = 10
+ESQUECER_APOS = 30
+
 
 class Pokedex:
     def __init__(self):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.detector = YOLO(DETECTOR)
+        self.rastreador = YOLO(DETECTOR)
         self.classes = json.loads(CLASSES.read_text(encoding="utf-8"))
         self.classificador = criar_modelo(len(self.classes), self.device)
         self.classificador.load_state_dict(torch.load(CLASSIFICADOR, map_location=self.device))
         self.classificador.eval()
+
+        self.historico = {}
+        self.visto_em = {}
+        self.frame_n = 0
+
 
     def recortar(self, frame, caixa):
         h, w = frame.shape[:2]
@@ -38,6 +49,46 @@ class Pokedex:
 
         recorte = cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2RGB)
         return Image.fromarray(recorte)
+
+    def _classificar(self, frame, caixas):
+        lote = torch.stack([eval_tf(self.recortar(frame, c)) for c in caixas]).to(self.device)
+        
+        return torch.softmax(self.classificador(lote), dim=1).cpu()
+
+    def _esquecer(self):
+
+        velhos = [t for t, n in self.visto_em.items() if self.frame_n - n > ESQUECER_APOS]
+        for t in velhos:
+            del self.historico[t]
+            del self.visto_em[t]
+
+    @torch.inference_mode()
+    def rastrear(self, frame):
+        """Frame de vídeo: segue cada Pokémon e decide pela média dos últimos frames."""
+        self.frame_n += 1
+        resultado = self.rastreador.track(frame, persist=True, conf=CONF_DETECCAO,
+                                          tracker="bytetrack.yaml", verbose=False)[0]
+        boxes = resultado.boxes
+        if boxes.id is None:              #nada sendo seguido neste frame
+            self._esquecer()
+            return []
+
+        caixas = boxes.xyxy.cpu().int().tolist()
+        ids = boxes.id.int().tolist()
+        probs = self._classificar(frame, caixas)
+
+        saida = []
+        for caixa, tid, p in zip(caixas, ids, probs):
+            hist = self.historico.setdefault(tid, deque(maxlen=JANELA_FRAMES))
+            hist.append(p)
+            self.visto_em[tid] = self.frame_n
+
+            media = torch.stack(list(hist)).mean(dim=0)
+            conf, idx = media.max(dim=0)
+            saida.append((caixa, self.classes[idx.item()], conf.item()))
+
+        self._esquecer()
+        return saida
 
 
     @torch.inference_mode()
@@ -51,12 +102,9 @@ class Pokedex:
         if not caixas:
             return []
 
+        confs, idxs = self._classificar(frame, caixas).max(dim=1)
+        return [(c, self.classes[i], p) for c, i, p in zip(caixas, idxs.tolist(), confs.tolist())]
 
-        lote = torch.stack([eval_tf(self.recortar(frame, c)) for c in caixas]).to(self.device)
-        probs = torch.softmax(self.classificador(lote), dim=1)
-        confs, idxs = probs.max(dim=1)
-
-        return [(caixa, self.classes[i], c) for caixa, i, c in zip(caixas, idxs.tolist(), confs.tolist())]
 
 def desenhar(frame, deteccoes):
     for (x1, y1, x2, y2), nome, conf in deteccoes:
@@ -80,7 +128,7 @@ def rodar_webcam(pokedex, camera):
             print("Erro webcam")
             break
 
-        cv2.imshow("Pokedex", desenhar(frame, pokedex.identificar(frame)))
+        cv2.imshow("Pokedex", desenhar(frame, pokedex.rastrear(frame)))
 
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break

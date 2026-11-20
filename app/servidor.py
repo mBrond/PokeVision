@@ -42,6 +42,11 @@ class Camera:
         with self.lock_modelo:
             return self.pokedex.identificar(frame)
 
+    def rastrear(self, frame):
+        with self.lock_modelo:
+            return self.pokedex.rastrear(frame)
+
+
     def _loop(self):
         while self.rodando:
             ok, frame = self.cap.read()
@@ -49,7 +54,7 @@ class Camera:
                 time.sleep(0.1)
                 continue
 
-            deteccoes = self.identificar(frame)
+            deteccoes = self.rastrear(frame)
             #desenhar(frame, deteccoes)
             ok, buffer = cv2.imencode(".jpg", frame)
             if not ok:
