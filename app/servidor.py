@@ -35,6 +35,7 @@ class Camera:
         self.rodando = True
         self.lock = threading.Lock()
         self.lock_modelo = threading.Lock()
+        self.gradcam_ativo = False
         threading.Thread(target=self._loop, daemon=True).start()
 
 
@@ -46,6 +47,10 @@ class Camera:
         with self.lock_modelo:
             return self.pokedex.rastrear(frame)
 
+    def sobrepor_gradcam(self, frame, deteccoes):
+        with self.lock_modelo:
+            return self.pokedex.sobrepor_gradcam(frame, deteccoes)
+
 
     def _loop(self):
         while self.rodando:
@@ -55,6 +60,8 @@ class Camera:
                 continue
 
             deteccoes = self.rastrear(frame)
+            if self.gradcam_ativo:
+                frame = self.sobrepor_gradcam(frame, deteccoes)
             #desenhar(frame, deteccoes)
             ok, buffer = cv2.imencode(".jpg", frame)
             if not ok:
@@ -119,14 +126,22 @@ def info():
     _, dados = camera.ultimo()
     return dados
 
+@app.post("/gradcam")
+def alternar_gradcam(ativo: bool):
+    camera.gradcam_ativo = ativo
+    return {"ativo": camera.gradcam_ativo}
+
+
 @app.post("/identificar")
-def identificar(arquivo: UploadFile = File(...)):
+def identificar(arquivo: UploadFile = File(...), gradcam: bool = False):
     dados = np.frombuffer(arquivo.file.read(), dtype=np.uint8)
     frame = cv2.imdecode(dados, cv2.IMREAD_COLOR)
     if frame is None:
         raise HTTPException(400, "O arquivo não é uma imagem válida")
 
     deteccoes = camera.identificar(frame)
+    if gradcam:
+        frame = camera.sobrepor_gradcam(frame, deteccoes)
     desenhar(frame, deteccoes)
     _, buffer = cv2.imencode(".jpg", frame)
 

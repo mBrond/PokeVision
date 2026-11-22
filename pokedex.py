@@ -3,11 +3,13 @@ import json
 from pathlib import Path
 
 import cv2
+import numpy as np
 import torch
 from PIL import Image
 from ultralytics import YOLO
 
 from classifier.treinar_resnet import criar_modelo, eval_tf
+from classifier.gradcam import gradcam_lote
 
 from collections import deque
 
@@ -40,13 +42,15 @@ class Pokedex:
         self.frame_n = 0
 
 
-    def recortar(self, frame, caixa):
+    def _regiao(self, frame, caixa):
+        """Caixa com margem, sem sair da imagem."""
         h, w = frame.shape[:2]
         x1, y1, x2, y2 = caixa
         mx, my = int((x2 - x1) * MARGEM), int((y2 - y1) * MARGEM)
-        x1, y1 = max(0, x1 - mx), max(0, y1 - my)
-        x2, y2 = min(w, x2 + mx), min(h, y2 + my)
+        return max(0, x1 - mx), max(0, y1 - my), min(w, x2 + mx), min(h, y2 + my)
 
+    def recortar(self, frame, caixa):
+        x1, y1, x2, y2 = self._regiao(frame, caixa)
         recorte = cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2RGB)
         return Image.fromarray(recorte)
 
@@ -104,6 +108,27 @@ class Pokedex:
 
         confs, idxs = self._classificar(frame, caixas).max(dim=1)
         return [(c, self.classes[i], p) for c, i, p in zip(caixas, idxs.tolist(), confs.tolist())]
+
+    def sobrepor_gradcam(self, frame, deteccoes, opacidade=0.5):
+        """Pinta o mapa de calor de cada detecção dentro da sua caixa."""
+        if not deteccoes:
+            return frame
+
+        caixas = [d[0] for d in deteccoes]
+        alvos = [self.classes.index(d[1]) for d in deteccoes]
+        lote = torch.stack([eval_tf(self.recortar(frame, c)) for c in caixas]).to(self.device)
+        mapas = gradcam_lote(self.classificador, lote, alvos)
+
+        for caixa, mapa in zip(caixas, mapas):
+            x1, y1, x2, y2 = self._regiao(frame, caixa)
+            intensidade = cv2.resize(mapa, (x2 - x1, y2 - y1))
+            cor = cv2.applyColorMap(np.uint8(255 * intensidade), cv2.COLORMAP_JET)
+
+            alfa = (intensidade * opacidade)[..., None]       # transparência por pixel
+            regiao = frame[y1:y2, x1:x2]
+            frame[y1:y2, x1:x2] = (regiao * (1 - alfa) + cor * alfa).astype(np.uint8)
+
+        return frame
 
 
 def desenhar(frame, deteccoes):

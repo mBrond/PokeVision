@@ -7,7 +7,7 @@ import cv2
 import torch
 from PIL import Image
 
-from treinar_resnet import criar_modelo, eval_tf
+from classifier.treinar_resnet import criar_modelo, eval_tf
 
 ROOT = Path(__file__).resolve().parents[1]
 CLASSIFICADOR = ROOT / "models/classifier/resnet18_best.pth"
@@ -55,9 +55,9 @@ def prever(modelo, x, classes, k=3):
 
     return indices[0][0].item()
 
-def gradcam(modelo, x, classe):
-    """Retorna o mapa de calor (NumPy, valores 0 a 1) da classe, na grade da layer4."""
-
+def gradcam_lote(modelo, x, alvos):
+    """Mapas de calor para um lote. x: [N, 3, H, W]; alvos: lista com a classe de cada imagem.
+    Retorna NumPy [N, h, w] com valores de 0 a 1."""
     guardado = {}
 
     def guardar_gradiente(grad):
@@ -67,29 +67,29 @@ def gradcam(modelo, x, classe):
         guardado["ativacoes"] = saida
         saida.register_hook(guardar_gradiente)
 
-
-
     handle = modelo.layer4.register_forward_hook(capturar)
-
-    try:    
-        logits = modelo(x)
-        modelo.zero_grad()
-        logits[0, classe].backward()
-
+    try:
+        with torch.enable_grad():
+            logits = modelo(x)
+            modelo.zero_grad()
+            linhas = torch.arange(len(alvos), device=logits.device)
+            colunas = torch.tensor(alvos, device=logits.device)
+            logits[linhas, colunas].sum().backward()
     finally:
         handle.remove()
 
-
     A = guardado["ativacoes"]
     G = guardado["gradientes"]
+    alfa = G.mean(dim=(2, 3), keepdim=True)
+    mapas = torch.relu((alfa * A).sum(dim=1))                       # [N, h, w]
+    maximos = mapas.flatten(1).max(dim=1).values.view(-1, 1, 1)     # máximo de cada mapa
+    mapas = mapas / (maximos + 1e-8)
+    return mapas.detach().cpu().numpy()
 
-    alfa = G.mean(dim=(2,3), keepdim=True)
 
-    mapa = (alfa * A).sum(dim=1)
-    mapa = torch.relu(mapa)
-    mapa = mapa/ (mapa.max() + 1e-8)
-
-    return mapa[0].detach().cpu().numpy()
+def gradcam(modelo, x, classe):
+    """Uma imagem só: atalho para gradcam_lote."""
+    return gradcam_lote(modelo, x, [classe])[0]
 
 
 def visualizar(caminho, mapa, titulo, saida=None, altura=300):
@@ -119,7 +119,7 @@ def visualizar(caminho, mapa, titulo, saida=None, altura=300):
 
 
 if __name__ == "__main__":
-    #python classifier/gradcam.py images/Charmander.png              
+    # rodar da raiz: python -m classifier.gradcam images/Charmander.png              
     parser = argparse.ArgumentParser(description="Grad-CAM da ResNet em uma imagem")
     parser.add_argument("imagem", help="caminho de uma imagem com um Pokémon só")
     parser.add_argument("--classe", help="classe a explicar (padrão: a mais provável)")

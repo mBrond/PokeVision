@@ -10,6 +10,7 @@ const visor = el("visor");
 const visorImg = el("visor-img");
 const btnCamera = el("btn-camera");
 const btnImagem = el("btn-imagem");
+const btnRaiox = el("btn-raiox");
 
 const LIMIAR = 0.6;          // confiança mínima para mostrar a ficha
 const RETENCAO_MS = 30_000;  // quanto tempo a ficha fica sem o Pokémon ser visto
@@ -17,6 +18,8 @@ const RETENCAO_MS = 30_000;  // quanto tempo a ficha fica sem o Pokémon ser vis
 let timer = null;
 let fichaAtual = null;       // nome do Pokémon cuja ficha está na tela
 let vistoEm = 0;             // última vez que ele foi visto com confiança >= LIMIAR
+let raiox = false;            // raio-x (Grad-CAM) ligado?
+let ultimaImagem = null;      // última imagem enviada no modo imagem
 
 /* ---------- ficha ---------- */
 function barraConfianca(valor) {
@@ -125,11 +128,13 @@ function modoImagem() {
   visorImg.removeAttribute("src");
   visor.classList.add("modo-imagem", "aguardando");
   marcarBotao("imagem");
+  ultimaImagem = null;
   limparFicha();
   status.textContent = "arraste ou cole uma imagem";
 }
 
 async function enviarImagem(file) {
+  ultimaImagem = file;
   visor.classList.remove("aguardando");
   status.textContent = "analisando...";
 
@@ -137,7 +142,7 @@ async function enviarImagem(file) {
   form.append("arquivo", file);
 
   try {
-    const resp = await fetch("/identificar", { method: "POST", body: form });
+    const resp = await fetch(`/identificar?gradcam=${raiox}`, { method: "POST", body: form });
     const info = await resp.json();
     if (!resp.ok) throw new Error(info.detail);
 
@@ -187,6 +192,14 @@ window.addEventListener("drop", (e) => e.preventDefault());
 
 btnCamera.addEventListener("click", modoCamera);
 btnImagem.addEventListener("click", modoImagem);
+btnRaiox.addEventListener("click", async () => {
+  raiox = !raiox;
+  btnRaiox.classList.toggle("ativo", raiox);
+  await fetch(`/gradcam?ativo=${raiox}`, { method: "POST" });
+  if (visor.classList.contains("modo-imagem") && ultimaImagem) {
+    enviarImagem(ultimaImagem);           // reanalisa a imagem com ou sem raio-x
+  }
+});
 
 limparFicha();
 modoCamera();
