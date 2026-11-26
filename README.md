@@ -19,9 +19,13 @@ Medidos em conjuntos de teste separados, nunca usados no treino nem na escolha d
 | Modelo | Tarefa | Dados de teste | Resultado |
 |---|---|---|---|
 | YOLOv8m, 1 classe | localizar Pokémon | 95 imagens | mAP50 0,987 · mAP50-95 0,850 · recall 1,0 |
-| ResNet18 | identificar a espécie (142 classes) | ~2.500 imagens | 95,9% top-1 · 99,2% top-5 |
+| ResNet18 | identificar a espécie (151 classes) | 3.217 imagens | 95,8% top-1 · 99,3% top-5 |
 
-Os erros que sobram no classificador são quase todos entre evoluções da mesma linha (Poliwhirl/Poliwrath, Rhyhorn/Rhydon, Pidgeotto/Pidgeot).
+No classificador, o teste não tem cópias nem quase-cópias de imagens do treino (ver [Preparação do classificador](#preparação-do-classificador)). Por fonte: 96,4% nas artes do Kaggle, 94,2% nos sprites de jogos e 87,5% nas 40 imagens das 7 espécies que vieram do Pokemon Generation One. A versão anterior, com 142 classes, tinha 95,9%, mas num split com 18% do teste quase igual a imagens do treino.
+
+Depois da [limpeza manual](#limpeza-manual-imagens-estranhas), que tirou 290 imagens (fusões, vários Pokémon, rótulos trocados), o modelo foi retreinado. No mesmo teste limpo, o modelo de antes da limpeza faz 95,65% e o novo 95,80%. São 5 imagens de diferença, dentro do ruído. O ganho da limpeza é mais um teste confiável do que acurácia.
+
+Os erros que sobram no classificador são quase todos entre evoluções da mesma linha (Alakazam/Kadabra, Poliwrath/Poliwhirl, Charizard/Charmeleon, Cubone/Marowak).
 
 ## Arquitetura
 **Pipeline de reconhecimento** (`pokedex.py`, classe `Pokedex`):
@@ -58,8 +62,8 @@ Separar as tarefas deixa cada modelo aprender com os dados que tem:
 | | Detector (YOLOv8m) | Classificador (ResNet18) |
 |---|---|---|
 | Pergunta que responde | Onde há um Pokémon? | Qual Pokémon é este? |
-| Dados | 917 imagens com caixas | ~17 mil imagens por classe, sem caixas |
-| Classes | 1 ("pokemon") | 142 espécies |
+| Dados | 917 imagens com caixas | ~21 mil imagens, sem caixas |
+| Classes | 1 ("pokemon") | 151 espécies |
 | Entrada | o frame inteiro | o recorte da caixa, 224×224 |
 
 **Ganhos:** o detector de 1 classe encontrou todos os Pokémon do teste (recall 1,0), e a espécie passou a ser decidida por um modelo com cerca de 100 vezes mais exemplos por classe. Cada modelo também pode ser retreinado ou trocado sem mexer no outro.
@@ -83,9 +87,16 @@ pokedex/
 │   ├── treinar_yolo_4classes.py   # experimento: YOLO com 4 classes
 │   └── camera.py                  # experimento: YOLO puro na webcam
 ├── classifier/
+│   ├── preparar_dados.py          # junta as fontes, deduplica e gera o manifesto de treino/val/teste
+│   ├── fundos.py                  # fundos aleatórios para as imagens com transparência
+│   ├── triagem_clip.py            # nota de suspeita por imagem (CLIP), para a limpeza manual
+│   ├── figuras.py                 # acha imagens com mais de um Pokémon (separa as figuras do fundo)
+│   ├── revisar.py                 # página local de revisão; grava excluir.txt e revisadas.json
+│   ├── excluir.txt                # imagens tiradas na revisão manual (por MD5)
+│   ├── splits.csv                 # split treino/val/teste de cada imagem (por MD5)
 │   ├── treinar_resnet.py          # treino e avaliação do classificador atual
 │   ├── pokemon_classifier.ipynb   # experimento: primeira versão do classificador
-│   ├── resnet_camera.py           # experimento: classificação na webcam (incompatível com o modelo atual)
+│   ├── resnet_camera.py           # classificação da imagem inteira na webcam, sem detector
 │   └── treinar_yolo_cls.py        # experimento: classificador YOLOv8-cls
 ├── scripts/
 │   ├── uma_classe.py              # converte o dataset do Roboflow para 1 classe
@@ -102,9 +113,39 @@ pokedex/
 | Dataset | Uso | Fonte |
 |---|---|---|
 | Pokemon Gen 1 v2 (917 imagens, caixas em 149 classes, CC BY 4.0) | detector, convertido para 1 classe | [Roboflow](https://universe.roboflow.com/anthonyk/pokemon-gen-1/dataset/2) |
-| Pokemon Images First Generation (~17 mil imagens) | classificador | [Kaggle](https://www.kaggle.com/datasets/mikoajkolman/pokemon-images-first-generation17000-files) |
+| Pokemon Images First Generation (~17 mil imagens, 142 espécies) | classificador | [Kaggle](https://www.kaggle.com/datasets/mikoajkolman/pokemon-images-first-generation17000-files) |
+| Pokemon Generation One (6.837 imagens, 149 espécies) | classificador: só Paras, Persian, Golem, Muk, Onix, Krabby e Kabuto, o resto já está no Kaggle acima | [Kaggle](https://www.kaggle.com/datasets/thedagger/pokemon-generation-one), em `data/PokemonData/` |
+| Pokemon 1000 (40 sprites de jogos por espécie) | classificador: as 151 espécies da 1ª geração, inclusive os dois Nidoran | [Kaggle](https://www.kaggle.com/datasets/vedantkasargod/pokemon-1000-yolo), em `data/pokemon-dataset-1000/` |
 
-No dataset do Kaggle, as pastas `MrMime` e `Mr. Mime` são o mesmo Pokémon e precisam ser juntadas antes do treino, o que resulta em 142 classes.
+### Preparação do classificador
+
+`classifier/preparar_dados.py` monta o dataset das 151 espécies a partir das três fontes e grava `data/classificador/manifest.csv` (não copia imagens):
+
+- **Nomes:** normaliza as pastas (`MrMime`, `Mr. Mime` e `mr-mime` viram `Mr. Mime`; `nidoran-f` vira `Nidoran-F`) e ignora outras gerações e formas regionais.
+- **Formatos:** lê também os GIFs (1º frame), que o `ImageFolder` ignorava (776 arquivos).
+- **Duplicatas exatas** (mesmo MD5): fica uma cópia. Se as cópias estão em espécies diferentes (ex.: a mesma imagem em Abra e Kadabra), todas são descartadas, porque não dá para saber qual rótulo vale.
+- **Quase-duplicatas** (versões redimensionadas ou recomprimidas, detectadas por *dHash* do recorte do Pokémon): vão juntas para o mesmo split, para o teste não ter cópias do treino.
+- **Split** 70/15/15 por espécie.
+
+O resumo fica em `data/classificador/relatorio.txt`. As imagens com transparência (~6 mil) recebem um fundo aleatório a cada época no treino (`classifier/fundos.py`) e fundo branco na avaliação. Antes, o `convert("RGB")` deixava esse fundo preto. Fotos colocadas em `data/fundos/` também entram como fundo.
+
+O split de cada imagem fica em `classifier/splits.csv`, por MD5 e versionado no git. Rodar o script de novo **mantém o split** de quem já está nele. Assim, excluir imagens não embaralha o teste, modelos treinados antes continuam comparáveis, e um clone novo do repositório monta exatamente o mesmo treino/val/teste. Só imagens novas (de uma fonte acrescentada, por exemplo) são sorteadas. Para sortear tudo de novo, use `--refazer-split`.
+
+### Limpeza manual (imagens estranhas)
+
+O dataset de 17 mil imagens veio de buscas na internet e tem fusões de Pokémon, fan art humanizada, imagens com vários personagens e rótulos trocados. Para não revisar 21 mil imagens uma a uma:
+
+1. `python classifier/triagem_clip.py` dá uma **nota de suspeita** a cada imagem usando o CLIP ViT-L/14, sem treino nenhum. A nota é a média de quatro sinais:
+   - o CLIP acha que é outra espécie;
+   - os 10 vizinhos mais parecidos têm outro rótulo;
+   - a imagem está longe do "jeito típico" da classe;
+   - ela combina mais com descrições como "fusão de dois Pokémon" ou "Pokémon desenhado como humano" do que com "um Pokémon".
+
+   O CLIP não sabe contar: marcava Exeggcute e Dugtrio como "vários Pokémon" e deixava passar imagens com Pidgey e Pidgeotto lado a lado. Por isso, imagens com **mais de um Pokémon** são procuradas à parte (`classifier/figuras.py`). Em fundo liso ou transparente, as figuras que não se tocam são separadas e cada uma é classificada pela ResNet. Duas espécies diferentes vão para o topo da lista ("2+ espécies: A + B"), e várias figuras da mesma espécie aparecem como "várias figuras". Imagens com cenário no fundo e Pokémon encostados um no outro não são cobertos.
+
+   Na primeira vez, o script baixa os pesos do CLIP (~1,7 GB).
+2. `python classifier/revisar.py` abre uma página em http://127.0.0.1:8001 com cada classe ordenada da imagem mais suspeita para a menos. A entrada "★ Mais de um Pokémon" junta as imagens com várias figuras ou que o CLIP achou que são um grupo. Clicar exclui a imagem, e cada clique é gravado em `classifier/excluir.txt` (por MD5, versionado no git). O progresso por classe fica em `classifier/revisadas.json`. Vale começar pelo filtro "só val + teste", porque ruído no teste distorce a medição.
+3. `python classifier/preparar_dados.py` tira as excluídas do manifesto, e depois é só treinar de novo.
 
 ## Como usar
 
@@ -118,6 +159,8 @@ pip install -r requirements.txt
 
 Para treinar em GPU NVIDIA, instale o PyTorch com CUDA pelo seletor de [pytorch.org](https://pytorch.org/get-started/locally/).
 
+Os resultados acima foram obtidos com Python 3.14, PyTorch 2.15 (CUDA 13.2) numa GTX 1650 de 4 GB, Ultralytics 8.4, open_clip 4.2 e NumPy 2.5.
+
 ### Treino
 
 1. Baixe o dataset do Roboflow em `data/roboflow-gen1/` e converta para 1 classe:
@@ -128,7 +171,11 @@ Para treinar em GPU NVIDIA, instale o PyTorch com CUDA pelo seletor de [pytorch.
    ```bash
    python detector/treinar_yolo_1classe.py
    ```
-3. Treine o classificador. O dataset do Kaggle é baixado pelo `kagglehub`, e os pesos e a lista de classes são salvos em `models/classifier/`:
+3. Prepare os dados do classificador. O dataset de 17 mil imagens é baixado pelo `kagglehub`; os outros dois precisam estar em `data/PokemonData/` e `data/pokemon-dataset-1000/`. O script já aplica as exclusões de `classifier/excluir.txt` e os splits de `classifier/splits.csv`, então não é preciso refazer a revisão manual:
+   ```bash
+   python classifier/preparar_dados.py
+   ```
+4. Treine o classificador. Os pesos e a lista de classes são salvos em `models/classifier/` (o arquivo em uso pela Pokédex é sobrescrito). A semente é fixa, mas na GPU os resultados ainda variam um pouco entre rodadas:
    ```bash
    python classifier/treinar_resnet.py
    ```
