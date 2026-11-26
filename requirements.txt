@@ -10,3 +10,5 @@ requests
 fastapi
 uvicorn
 python-multipart
+open_clip_torch
+scipy
