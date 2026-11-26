@@ -1,44 +1,27 @@
-import cv2
-import torch
-import torch.nn as nn
-from torchvision import transforms
-from torchvision.models import resnet18
-from PIL import Image
+import json
+import sys
 from pathlib import Path
 
+import cv2
+import torch
+from PIL import Image
+
 ROOT = Path(__file__).resolve().parents[1]  # raiz do repositório
+sys.path.insert(0, str(ROOT))
 
+from classifier.treinar_resnet import CLASSES_JSON, PESOS, criar_modelo, eval_tf
 
-# 1. Definir as mesmas classes do seu treinamento
-classes = [
-    'Abra', 'Aerodactyl', 'Alakazam', 'Arbok', 'Arcanine', 'Articuno', 'Beedrill', 'Bellsprout', 
-    'Blastoise', 'Bulbasaur', 'Butterfree', 'Caterpie', 'Chansey', 'Charizard', 'Charmander', 
-    'Charmeleon', 'Clefable', 'Clefairy', 'Cloyster', 'Cubone', 'Dewgong', 'Diglett', 'Ditto', 
-    'Dodrio', 'Doduo', 'Dragonair', 'Dragonite', 'Dratini', 'Drowzee', 'Dugtrio', 'Eevee', 
-    'Ekans', 'Electabuzz', 'Electrode', 'Exeggcute', 'Exeggutor', 'Farfetchd', 'Fearow', 
-    'Flareon', 'Gastly', 'Gengar', 'Geodude', 'Gloom', 'Golbat', 'Goldeen', 'Golduck', 
-    'Graveler', 'Grimer', 'Growlithe', 'Gyarados', 'Haunter', 'Hitmonchan', 'Hitmonlee', 
-    'Horsea', 'Hypno', 'Ivysaur', 'Jigglypuff', 'Jolteon', 'Jynx', 'Kabutops', 'Kadabra', 
-    'Kakuna', 'Kangaskhan', 'Kingler', 'Koffing', 'Lapras', 'Lickitung', 'Machamp', 'Machoke', 
-    'Machop', 'Magikarp', 'Magmar'
-]
+# 1. Classes e pesos do modelo mais recente (os mesmos que a Pokédex usa)
+classes = json.loads(CLASSES_JSON.read_text(encoding="utf-8"))
 
 # 2. Recriar a estrutura do modelo e carregar os pesos salvos
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = resnet18()
-model.fc = nn.Linear(model.fc.in_features, len(classes))
-
-# Substitua pelo nome do seu arquivo de pesos salvo durante o treino
-model.load_state_dict(torch.load(ROOT / "models/classifier/model_epoch_5.pth", map_location=device)) 
-model.to(device)
+model = criar_modelo(len(classes), device)
+model.load_state_dict(torch.load(PESOS, map_location=device))
 model.eval()
 
 # 3. Pipeline de transformação idêntico ao de validação/teste (sem data augmentation)
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))  
-])
+transform = eval_tf
 
 # 4. Inicializar a captura da Webcam (0 costuma ser a câmera padrão)
 cap = cv2.VideoCapture(0)
