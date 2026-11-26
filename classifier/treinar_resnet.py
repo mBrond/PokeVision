@@ -1,18 +1,26 @@
+import csv
 import json
+import random
+import sys
 from pathlib import Path
 
-import kagglehub
+if __package__ in (None, ""):      # rodado como script (python classifier/treinar_resnet.py)
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import numpy as np
 import torch
 import torch.nn as nn
 from sklearn.metrics import confusion_matrix
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision import transforms
-from torchvision.datasets import ImageFolder
 from torchvision.models import resnet18, ResNet18_Weights
+
+from classifier.fundos import compor
+from classifier.preparar_dados import abrir
 
 
 ROOT = Path(__file__).resolve().parents[1]
+DADOS = ROOT / "data/classificador"          # gerado por classifier/preparar_dados.py
 SAIDA = ROOT / "models/classifier"
 PESOS = SAIDA / "resnet18_best.pth"
 CLASSES_JSON = SAIDA / "classes.json"
@@ -25,51 +33,69 @@ SEED = 42
 
 MEAN = [0.485, 0.456, 0.406]   # normalização do ImageNet
 STD = [0.229, 0.224, 0.225]
+COR_MEDIA = tuple(round(m * 255) for m in MEAN)   # preenche os cantos da rotação (vira ~0 após normalizar)
 
 def para_rgb(img):
     return img.convert("RGB")
 
 train_tf = transforms.Compose([
     transforms.Lambda(para_rgb),
-    transforms.Resize((224, 244)),
+    transforms.Resize((224, 224)),
     transforms.RandomHorizontalFlip(),
-    transforms.RandomRotation(20),
+    transforms.RandomRotation(20, fill=COR_MEDIA),
     transforms.ToTensor(),
     transforms.Normalize(MEAN, STD)
 ])
 
 eval_tf = transforms.Compose([
     transforms.Lambda(para_rgb),
-    transforms.Resize((224, 244)),
+    transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize(MEAN, STD)
 ])
 
+
+class DatasetManifesto(Dataset):
+    """Lê as imagens listadas no manifest.csv. Imagens transparentes ganham fundo
+    aleatório (treino) ou branco (avaliação), em vez do preto do convert("RGB")."""
+
+    def __init__(self, linhas, classes, transform, fundo_aleatorio):
+        idx = {c: i for i, c in enumerate(classes)}
+        self.samples = [(l["caminho"], idx[l["classe"]]) for l in linhas]   # mesmo formato do ImageFolder
+        self.fontes = [l["fonte"] for l in linhas]
+        self.transform = transform
+        self.fundo_aleatorio = fundo_aleatorio
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, i):
+        caminho, rotulo = self.samples[i]
+        img = compor(abrir(caminho), self.fundo_aleatorio)
+        return self.transform(img), rotulo
+
+
 def carregar_dados():
-    path = Path(kagglehub.dataset_download("mikoajkolman/pokemon-images-first-generation17000-files"))
-    pasta = path / "pokemon"
+    manifesto = DADOS / "manifest.csv"
+    if not manifesto.exists():
+        raise SystemExit(f"{manifesto} não existe. Rode antes: python classifier/preparar_dados.py")
 
-    ds_train = ImageFolder(pasta, transform=train_tf)
-    ds_eval = ImageFolder(pasta, transform=eval_tf)
+    classes = json.loads((DADOS / "classes.json").read_text(encoding="utf-8"))
+    with open(manifesto, encoding="utf-8") as f:
+        linhas = list(csv.DictReader(f))
 
-    n = len(ds_train)
-    g = torch.Generator().manual_seed(SEED)
-    idx = torch.randperm(n, generator=g).tolist()
-    n_train, n_val = int(0.7 * n), int(0.15 * n)
-    idx_train = idx[:n_train]
-    idx_val = idx[n_train:n_train + n_val]
-    idx_test = idx[n_train + n_val:]
-
+    ds_train = DatasetManifesto(linhas, classes, train_tf, fundo_aleatorio=True)
+    ds_eval = DatasetManifesto(linhas, classes, eval_tf, fundo_aleatorio=False)
+    ids = {s: [i for i, l in enumerate(linhas) if l["split"] == s] for s in ("train", "val", "test")}
 
     def loader(ds, ids, shuffle):
         return DataLoader(Subset(ds, ids), batch_size=BATCH, shuffle=shuffle,
                           num_workers=WORKERS, pin_memory=True, persistent_workers=True)
 
-
-    return (ds_train.classes,
-            loader(ds_train, idx_train, True),
-            loader(ds_eval, idx_val, False),
-            loader(ds_eval, idx_test, False))
+    return (classes,
+            loader(ds_train, ids["train"], True),
+            loader(ds_eval, ids["val"], False),
+            loader(ds_eval, ids["test"], False))
 
 
 def criar_modelo(n_classes, device):
@@ -147,6 +173,18 @@ def avaliar_teste(model, test_loader, classes, device):
     preds, labels = np.array(preds), np.array(labels)
     print(f"\nTeste: top-1 {(preds == labels).mean():.4f} | top-5 {top5_acertos / len(labels):.4f}")
 
+    subset = test_loader.dataset
+    fontes = np.array([subset.dataset.fontes[i] for i in subset.indices])
+    for fonte in sorted(set(fontes)):
+        m = fontes == fonte
+        print(f"  {fonte:13} top-1 {(preds[m] == labels[m]).mean():.4f}  ({m.sum()} imagens)")
+
+    por_classe = [(classes[c], (preds[labels == c] == c).mean(), (labels == c).sum())
+                  for c in range(len(classes)) if (labels == c).any()]
+    print("\nClasses com menor acerto:")
+    for nome, acc, n in sorted(por_classe, key=lambda t: t[1])[:8]:
+        print(f"  {nome:12} {acc:.2f}  ({n} imagens)")
+
     cm = confusion_matrix(labels, preds, labels=range(len(classes)))
     np.fill_diagonal(cm, 0)   # ignora os acertos
     print("\nPares mais confundidos (real -> previsto: vezes):")
@@ -162,7 +200,21 @@ def avaliar_teste(model, test_loader, classes, device):
 
 
 
+def fixar_semente(seed=SEED):
+    """Mesma ordem dos lotes, mesmos fundos aleatórios e mesma inicialização a cada rodada.
+
+    Na GPU ainda sobra uma variação pequena entre rodadas: algumas operações do backward
+    em CUDA não são determinísticas, e GPUs ou versões do PyTorch diferentes somam de outro jeito.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)          # também define a semente de cada worker do DataLoader
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+
 def main():
+    fixar_semente()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     SAIDA.mkdir(parents=True, exist_ok=True)
 
